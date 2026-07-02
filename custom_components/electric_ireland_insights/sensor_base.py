@@ -28,7 +28,7 @@ class Sensor(CoordinatorEntity, SensorEntity):
 
     def __init__(self, coordinator: DataUpdateCoordinator, device_id: str, name: str, metric: str,
                  unit: str, device_class: SensorDeviceClass, unit_class: str | None = None,
-                 lookup_days: int = DEFAULT_LOOKUP_DAYS):
+                 lookup_days: int = DEFAULT_LOOKUP_DAYS, account_number: str | None = None):
         super().__init__(coordinator)
 
         self._attr_name = f"Electric Ireland {name}"
@@ -39,6 +39,7 @@ class Sensor(CoordinatorEntity, SensorEntity):
         self._metric = metric
         self._unit_class = unit_class
         self._lookup_days = lookup_days
+        self._account_number = account_number
         # statistic_id includes device_id to avoid collision across multiple accounts
         self._statistic_id = f"{DOMAIN}:{metric}_{device_id.replace('-', '_').lower()}"
 
@@ -68,6 +69,8 @@ class Sensor(CoordinatorEntity, SensorEntity):
         invalid = sum(1 for dp in datapoints if dp.get(self._metric) is not None and not isinstance(dp.get(self._metric), (int, float)))
 
         return {
+            "account_number": self._account_number,
+            "period_days": self._lookup_days,
             "start_date": timestamps[0].isoformat() if timestamps else None,
             "end_date": timestamps[-1].isoformat() if timestamps else None,
             "latest_hour_timestamp": timestamps[-1].isoformat() if timestamps else None,
