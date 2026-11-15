@@ -28,20 +28,28 @@ class Sensor(CoordinatorEntity, SensorEntity):
 
     def __init__(self, coordinator: DataUpdateCoordinator, device_id: str, name: str, metric: str,
                  unit: str, device_class: SensorDeviceClass, unit_class: str | None = None,
-                 lookup_days: int = DEFAULT_LOOKUP_DAYS, account_number: str | None = None):
+                 lookup_days: int = DEFAULT_LOOKUP_DAYS, account_number: str | None = None,
+                 stat_suffix: str | None = None):
         super().__init__(coordinator)
 
         self._attr_name = f"Electric Ireland {name}"
+        # stat_suffix lets a second entity reuse the same metric data but keep a
+        # separate entity id and statistic series (e.g. monotonic total vs period).
+        key = metric if stat_suffix is None else f"{metric}_{stat_suffix}"
         # device_id (config entry id) is included so two accounts never share a statistic_id
-        self._attr_unique_id = f"{DOMAIN}_{metric}_{device_id}"
+        self._attr_unique_id = f"{DOMAIN}_{key}_{device_id}"
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._metric = metric
         self._unit_class = unit_class
         self._lookup_days = lookup_days
         self._account_number = account_number
+        self._accumulated = None
+        # Subclasses feeding the Energy dashboard set this so the stat series is
+        # clamped to be strictly non-decreasing (see _import_statistics).
+        self._monotonic = False
         # statistic_id includes device_id to avoid collision across multiple accounts
-        self._statistic_id = f"{DOMAIN}:{metric}_{device_id.replace('-', '_').lower()}"
+        self._statistic_id = f"{DOMAIN}:{key}_{device_id.replace('-', '_').lower()}"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -123,6 +131,9 @@ class Sensor(CoordinatorEntity, SensorEntity):
         else:
             accumulated = 0
             last_start_ts = 0
+        # Seed live state from the DB even when there are no new buckets to import,
+        # so TOTAL_INCREASING entities report the current running total after restart.
+        self._accumulated = accumulated
 
         def hour_block(dt: datetime) -> datetime:
             # XX:00:00 states belong to previous hour block
@@ -141,7 +152,13 @@ class Sensor(CoordinatorEntity, SensorEntity):
                 continue
             values = [v for _, v in group]
             partial = sum(values)
+            # Energy dashboard sources (monotonic flag) must never dip: a stray
+            # negative hour from the API would otherwise subtract from the running
+            # sum and show as a drop. Clamp per-bucket so the series only grows.
+            if self._monotonic and partial < 0:
+                partial = 0
             accumulated += partial
+            self._accumulated = accumulated
             stat_data.append(StatisticData(
                 start=dt,
                 state=partial,

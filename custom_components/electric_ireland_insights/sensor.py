@@ -28,6 +28,7 @@ async def async_setup_entry(
 
     async_add_devices([
         ConsumptionSensor(coordinator, config_entry.entry_id, lookup_days, account_number),
+        TotalConsumptionSensor(coordinator, config_entry.entry_id, lookup_days, account_number),
         CostSensor(coordinator, config_entry.entry_id, lookup_days, account_number),
         BillingConsumptionSensor(coordinator, config_entry.entry_id, billing_day, account_number),
         BillingCostSensor(coordinator, config_entry.entry_id, billing_day, account_number),
@@ -39,6 +40,28 @@ class ConsumptionSensor(Sensor):
         super().__init__(coordinator, device_id, "Consumption", "consumption",
                          UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, unit_class="energy",
                          lookup_days=lookup_days, account_number=account_number)
+
+
+class TotalConsumptionSensor(Sensor):
+    # Monotonic running total for the Energy dashboard. ConsumptionSensor is a
+    # sliding-window period total — its state goes up and down as old hours age
+    # out, which the Energy dashboard reads as negative usage / meter resets.
+    # This entity instead reports the ever-increasing accumulated sum that
+    # _import_statistics maintains in the recorder, so it is a valid
+    # TOTAL_INCREASING source. Owns its own statistic series.
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, coordinator, device_id, lookup_days, account_number=None):
+        super().__init__(coordinator, device_id, "Total Consumption", "consumption",
+                         UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, unit_class="energy",
+                         lookup_days=lookup_days, account_number=account_number,
+                         stat_suffix="total")
+        self._monotonic = True
+
+    @property
+    def native_value(self):
+        # Latest accumulated sum maintained by _import_statistics (never decreases).
+        return round(self._accumulated, 2) if self._accumulated is not None else None
 
 
 class CostSensor(Sensor):
